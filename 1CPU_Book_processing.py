@@ -1,6 +1,6 @@
 
 #This will download the booknlp files using my huggingface backup     
-import download_missing_booknlp_models 
+ 
 
 
 import os
@@ -345,7 +345,7 @@ import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from epub2txt import epub2txt
-from booknlp.booknlp import BookNLP
+from modernbooknlp_proxy import BookNLP
 import nltk
 import re
 nltk.download('averaged_perceptron_tagger')
