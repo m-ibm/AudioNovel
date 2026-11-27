@@ -4,12 +4,37 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 import pandas as pd
+
+
+def progress_line(stage: str, current: int, total: int, width: int = 28) -> str:
+    """Return a stable, testable text progress bar."""
+    fraction = min(1.0, max(0.0, current / total)) if total > 0 else 0.0
+    filled = int(width * fraction)
+    return f"{stage}: [{'#' * filled}{'-' * (width - filled)}] {fraction * 100:5.1f}% ({current}/{total})"
+
+
+class Progress:
+    """Write a compact progress bar to stderr, including in redirected logs."""
+    def __init__(self, stage: str, total: int):
+        self.stage, self.total = stage, max(1, total)
+        self.last_reported = -1
+        self.tty = sys.stderr.isatty()
+
+    def update(self, current: int) -> None:
+        current = min(current, self.total)
+        interval = max(1, self.total // 20)
+        if current != self.total and current - self.last_reported < interval:
+            return
+        line = progress_line(self.stage, current, self.total)
+        print(line, file=sys.stderr, end="\\r" if self.tty and current < self.total else "\\n", flush=True)
+        self.last_reported = current
 
 
 def run(cmd: list[str]) -> str:
@@ -30,11 +55,11 @@ def probe_audio(path: Path) -> tuple[float, int, int]:
 
 def ffconcat_quote(path: Path) -> str:
     # concat demuxer single-quoted path escaping
-    return "file '" + str(path.resolve()).replace("'", "'\\''") + "'\n"
+    return "file '" + str(path.resolve()).replace("'", "'\\''") + "'\\n"
 
 
 def ffmetadata_escape(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("=", "\\=").replace(";", "\\;").replace("#", "\\#").replace("\n", " ").replace("\r", " ")
+    return value.replace("\\\\", "\\\\\\\\").replace("=", "\\\\=").replace(";", "\\\\;").replace("#", "\\\\#").replace("\\n", " ").replace("\\r", " ")
 
 
 def main() -> int:
@@ -42,8 +67,8 @@ def main() -> int:
     p.add_argument("--book-csv", type=Path, default=Path("Working_files/Book/book.csv"))
     p.add_argument("--clips-dir", type=Path, default=Path("Working_files/generated_audio_clips_incremental"))
     p.add_argument("--output-dir", type=Path, default=Path("output_audiobook"))
-    p.add_argument("--title", default="The City & The City")
-    p.add_argument("--author", default="China Miéville")
+    p.add_argument("--title", default="Audiobook", help="Audiobook title (default: Audiobook)")
+    p.add_argument("--author", default="Unknown Author", help="Audiobook author (default: Unknown Author)")
     p.add_argument("--silence-ms", type=int, default=750)
     p.add_argument("--allow-missing-manifest", action="store_true", help="Check files only; skip manifest state/hash verification")
     a = p.parse_args()
@@ -62,7 +87,8 @@ def main() -> int:
     manifest_rows = manifest.get("rows", {})
     clip_paths: list[Path] = []
     clip_metadata: dict[Path, tuple[float, int, int]] = {}
-    for _, row in df.iterrows():
+    validation_progress = Progress("Validating clips", len(df))
+    for row_number, (_, row) in enumerate(df.iterrows(), start=1):
         aid = str(row.audio_id)
         path = a.clips_dir / (aid if aid.lower().endswith(".wav") else f"{aid}.wav")
         if not path.is_file(): raise FileNotFoundError(f"Missing generated clip {aid}: {path}")
@@ -78,8 +104,9 @@ def main() -> int:
             _, expected_sr, expected_ch = clip_metadata[clip_paths[0]]
             if (sr, channels) != (expected_sr, expected_ch): raise RuntimeError(f"Audio format mismatch in {path}")
         clip_paths.append(path)
+        validation_progress.update(row_number)
     if not clip_paths: raise RuntimeError("No clip rows in book.csv")
-    first_duration, sample_rate, channels = clip_metadata[clip_paths[0]]
+    _, sample_rate, channels = clip_metadata[clip_paths[0]]
     if channels not in (1, 2): raise RuntimeError(f"Only mono/stereo supported for silence insertion; first clip has {channels} channels")
     silence_seconds = max(0, a.silence_ms) / 1000.0
     a.output_dir.mkdir(parents=True, exist_ok=True)
@@ -121,15 +148,33 @@ def main() -> int:
         metadata_lines = [";FFMETADATA1", f"title={ffmetadata_escape(a.title)}", f"artist={ffmetadata_escape(a.author)}"]
         for ch, title, start, end in chapter_entries:
             metadata_lines += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={start}", f"END={end}", f"title={ffmetadata_escape(f'Chapter {ch}: {title}')}" ]
-        metadata_path.write_text("\n".join(metadata_lines) + "\n", encoding="utf-8")
-        output = a.output_dir / "The_City_and_The_City.m4b"
-        cmd = ["ffmpeg", "-hide_banner", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_path),
+        metadata_path.write_text("\\n".join(metadata_lines) + "\\n", encoding="utf-8")
+        safe_title = re.sub(r"[^A-Za-z0-9._-]+", "_", a.title).strip("._") or "Audiobook"
+        output = a.output_dir / f"{safe_title}.m4b"
+        cmd = ["ffmpeg", "-hide_banner", "-y", "-progress", "pipe:1", "-nostats", "-f", "concat", "-safe", "0", "-i", str(concat_path),
                "-f", "ffmetadata", "-i", str(metadata_path), "-map", "0:a:0", "-map_metadata", "1", "-map_chapters", "1",
                "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(output)]
-        subprocess.run(cmd, check=True)
+        encoding_progress = Progress("Encoding audiobook", max(1, timeline_ms))
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=None, text=True, bufsize=1)
+        assert process.stdout is not None
+        for line in process.stdout:
+            key, sep, value = line.strip().partition("=")
+            if not sep:
+                continue
+            if key == "out_time_ms":
+                try:
+                    encoding_progress.update(int(value) // 1000)
+                except ValueError:
+                    pass
+            elif key == "progress" and value == "end":
+                encoding_progress.update(timeline_ms)
+        return_code = process.wait()
+        if return_code:
+            raise subprocess.CalledProcessError(return_code, cmd)
     print(f"Created: {output}")
     print(f"Rows: {len(df)}; chapters: {len(chapter_entries)}; inserted inter-row silence: {a.silence_ms} ms")
     return 0
+
 
 if __name__ == "__main__":
     try: raise SystemExit(main())
