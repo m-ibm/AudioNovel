@@ -35,6 +35,8 @@ import torch
 import torchaudio
 from tqdm import tqdm
 
+from voxnovel_fragment_utils import merge_punctuation_fragments, write_silent_wav
+
 from voxnovel_xtts_backend import (
     VoxNovelTTSBackend,
     choose_device,
@@ -178,7 +180,9 @@ class EnglishCTCAligner:
         full_chars = self._normalize(full_text)
         source_last_char = max((i for i, ch in enumerate(source_chars) if ch != "|"), default=-1)
         if source_last_char < 0:
-            raise ValueError(f"No alignable characters in source text: {source_text!r}")
+            raise ValueError(
+                f"Source fragment has no alignable characters (punctuation-only): {source_text!r}"
+            )
 
         # Preserve a word boundary between source and padding.
         if source_chars and full_chars[:len(source_chars)] == source_chars:
@@ -299,7 +303,9 @@ def row_fragments(text: str) -> list[str]:
     fragments: list[str] = []
     for sentence in sent_tokenize(text):
         fragments.extend(split_long_sentence(sentence))
-    return [part.strip() for part in fragments if part and part.strip()]
+    # Sentence splitting can emit trailing quote/markup tokens as standalone
+    # fragments. Keep punctuation with speech instead of padding/alignment on it.
+    return merge_punctuation_fragments(fragments)
 
 
 def hash_payload(payload: dict[str, Any]) -> str:
@@ -542,11 +548,10 @@ def main() -> int:
         text = clean_text(row.Text)
         actor = str(row.voice_actor).strip()
         language = str(row.language).strip() or args.language or "en"
-        if not text:
-            raise ValueError(f"Empty Text at row {index}, audio_id={audio_id}")
+        # Rows containing only punctuation/formatting (or blank text) have no
+        # speech to synthesize. They still receive a short silent WAV below so
+        # every book.csv audio_id retains a corresponding output file.
         fragments = row_fragments(text)
-        if not fragments:
-            raise ValueError(f"No non-empty TTS fragments at row {index}, audio_id={audio_id}")
         payload = {
             "audio_id": audio_id, "text": text, "voice_actor": actor, "language": language,
             "model": args.model, "device": str(device), "padding_enabled": not args.no_padding,
@@ -619,7 +624,14 @@ def main() -> int:
                     if not valid_wav(fragment_path):
                         raise RuntimeError(f"TTS returned an invalid fragment: {fragment_path}")
                 fragment_paths.append(fragment_path)
-            combine_wavs(fragment_paths, output_path)
+            if fragment_paths:
+                combine_wavs(fragment_paths, output_path)
+            else:
+                # Preserve the one-WAV-per-row contract without asking XTTS to
+                # pronounce formatting markers or an empty transcript.
+                write_silent_wav(output_path)
+            if not valid_wav(output_path):
+                raise RuntimeError(f"Generated row WAV failed validation: {output_path}")
             clip_hash = sha256_file(output_path)
             entry = {
                 "status": "generated", "fingerprint": fingerprint, "wav_sha256": clip_hash,
@@ -627,6 +639,7 @@ def main() -> int:
                 "voice_actor": actor, "language": language, "text": clean_text(row.Text),
                 "fragments": len(fragments), "padded_fragments": padded_count,
                 "unpadded_fallback_fragments": unpadded_fallback_count,
+                "silent_placeholder": not bool(fragments),
                 "completed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "model": args.model, "device": str(device),
             }
