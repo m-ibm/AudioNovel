@@ -1,0 +1,84 @@
+name: XTTS MPS vs CPU benchmark (M1)
+
+on:
+  push:
+    branches:
+      - research/xtts-mps-m1-benchmark
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    # GitHub's macos-26 standard runner is an Apple M1 arm64 VM.
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Record runner hardware
+        run: |
+          sw_vers
+          uname -a
+          sysctl -n machdep.cpu.brand_string || true
+          sysctl -n hw.memsize || true
+
+      - name: Install uv and espeak-ng
+        run: |
+          if ! command -v uv >/dev/null 2>&1; then
+            brew install uv
+          fi
+          if ! command -v espeak-ng >/dev/null 2>&1; then
+            brew install espeak-ng
+          fi
+          uv --version
+          espeak-ng --version
+
+      - name: Check out independent XTTS benchmark harness
+        run: |
+          git clone --depth 1 https://github.com/5uck1ess/tts-bench.git /tmp/tts-bench
+
+      - name: Install maintained Coqui XTTS environment
+        env:
+          COQUI_TOS_AGREED: "1"
+        run: |
+          cd /tmp/tts-bench
+          ./install.sh coqui
+
+      - name: Verify actual PyTorch MPS availability
+        run: |
+          /tmp/tts-bench/venvs/coqui/bin/python - <<'PY'
+          import platform
+          import torch
+          print("machine:", platform.machine())
+          print("torch:", torch.__version__)
+          print("mps backend:", hasattr(torch.backends, "mps"))
+          print("mps available:", torch.backends.mps.is_available())
+          print("mps built:", torch.backends.mps.is_built())
+          assert platform.machine() == "arm64", "Expected Apple Silicon runner"
+          assert torch.backends.mps.is_available(), "MPS unavailable"
+          PY
+
+      - name: Benchmark XTTS-v2 voice cloning on CPU and MPS
+        env:
+          COQUI_TOS_AGREED: "1"
+        run: |
+          cd /tmp/tts-bench
+          python3 bench.py \
+            --models coqui \
+            --devices cpu,mps \
+            --reference reference/jo.wav \
+            --prompts 1,3 \
+            --runs 3 \
+            --timeout 1200 \
+            --skip-refcheck \
+            --rig gha-m1
+          echo "=== Result files ==="
+          find results -maxdepth 3 -type f -print
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xtts-mps-m1-benchmark
+          path: /tmp/tts-bench/results/
+          if-no-files-found: warn
+          retention-days: 30
