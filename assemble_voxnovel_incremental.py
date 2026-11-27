@@ -33,7 +33,7 @@ class Progress:
         if current != self.total and current - self.last_reported < interval:
             return
         line = progress_line(self.stage, current, self.total)
-        print(line, file=sys.stderr, end="\\r" if self.tty and current < self.total else "\\n", flush=True)
+        print(line, file=sys.stderr, end="\r" if self.tty and current < self.total else "\n", flush=True)
         self.last_reported = current
 
 
@@ -55,11 +55,11 @@ def probe_audio(path: Path) -> tuple[float, int, int]:
 
 def ffconcat_quote(path: Path) -> str:
     # concat demuxer single-quoted path escaping
-    return "file '" + str(path.resolve()).replace("'", "'\\''") + "'\\n"
+    return "file '" + str(path.resolve()).replace("'", "'\\''") + "'\n"
 
 
 def ffmetadata_escape(value: str) -> str:
-    return value.replace("\\\\", "\\\\\\\\").replace("=", "\\\\=").replace(";", "\\\\;").replace("#", "\\\\#").replace("\\n", " ").replace("\\r", " ")
+    return value.replace("\\", "\\\\").replace("=", "\\=").replace(";", "\\;").replace("#", "\\#").replace("\n", " ").replace("\r", " ")
 
 
 def main() -> int:
@@ -148,7 +148,7 @@ def main() -> int:
         metadata_lines = [";FFMETADATA1", f"title={ffmetadata_escape(a.title)}", f"artist={ffmetadata_escape(a.author)}"]
         for ch, title, start, end in chapter_entries:
             metadata_lines += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={start}", f"END={end}", f"title={ffmetadata_escape(f'Chapter {ch}: {title}')}" ]
-        metadata_path.write_text("\\n".join(metadata_lines) + "\\n", encoding="utf-8")
+        metadata_path.write_text("\n".join(metadata_lines) + "\n", encoding="utf-8")
         safe_title = re.sub(r"[^A-Za-z0-9._-]+", "_", a.title).strip("._") or "Audiobook"
         output = a.output_dir / f"{safe_title}.m4b"
         cmd = ["ffmpeg", "-hide_banner", "-y", "-progress", "pipe:1", "-nostats", "-f", "concat", "-safe", "0", "-i", str(concat_path),
