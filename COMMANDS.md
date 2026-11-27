@@ -204,7 +204,7 @@ This is a book-specific default inherited from the current project. It is not de
 | `--silence-ms N` | `750` | Silence inserted between adjacent clips; negative values are treated as zero. |
 | `--allow-missing-manifest` | off | Permit assembly without a manifest; WAV existence/audio-format checks still run, but manifest status/hash verification is skipped. |
 
-For this book, always pass the actual title and author explicitly, as in the example. The generic defaults are intentional and must not be treated as book metadata.
+For this book, pass the actual title and author explicitly, as in the example. The current defaults are hard-coded project values and should not be relied on for other books.
 
 ### If the manifest is absent
 
