@@ -186,9 +186,11 @@ The assembler validates each WAV, checks manifest status and SHA-256 hashes, ver
 
 The input CSV must include `audio_id`, `chapter`, `chapter_title`, `Text`, and `voice_actor`. If `Start Location` exists, it is used for stable within-chapter ordering.
 
-The output filename is derived from the title. With the example above, the output is:
+In the current `main` version, the output filename is hard-coded by the script, regardless of `--title`:
 
-`output_audiobook/The_City_The_City.m4b`
+`output_audiobook/The_City_and_The_City.m4b`
+
+This is a book-specific default inherited from the current project. It is not derived from `book.csv`; pass `--title` and `--author` explicitly for correct embedded metadata. The companion progress-bar PR proposes replacing these defaults with generic metadata defaults and deriving the filename from `--title`.
 
 ### Assembler parameters
 
@@ -197,8 +199,8 @@ The output filename is derived from the title. With the example above, the outpu
 | `--book-csv PATH` | `Working_files/Book/book.csv` | Input CSV and chapter order. |
 | `--clips-dir PATH` | `Working_files/generated_audio_clips_incremental` | Directory containing row WAVs and normally `manifest.json`. |
 | `--output-dir PATH` | `output_audiobook` | Destination directory for the M4B. |
-| `--title TEXT` | `Audiobook` | Embedded audiobook title and basis for the output filename. |
-| `--author TEXT` | `Unknown Author` | Embedded artist/author metadata. |
+| `--title TEXT` | `The City & The City` | Embedded audiobook title metadata. |
+| `--author TEXT` | `China Miéville` | Embedded artist/author metadata. |
 | `--silence-ms N` | `750` | Silence inserted between adjacent clips; negative values are treated as zero. |
 | `--allow-missing-manifest` | off | Permit assembly without a manifest; WAV existence/audio-format checks still run, but manifest status/hash verification is skipped. |
 
