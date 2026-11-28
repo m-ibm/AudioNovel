@@ -179,8 +179,13 @@ python assemble_voxnovel_incremental.py \
   --output-dir output_audiobook \
   --title "The City & The City" \
   --author "China Miéville" \
+  --ebook-file input_book.epub \
   --silence-ms 750
 ```
+
+To use an already extracted image instead of an e-book, pass `--cover-image path/to/cover.jpg` (the two cover options are mutually exclusive). When `--ebook-file` is supplied, the assembler extracts its embedded cover using Calibre's `ebook-meta`. If neither option is supplied, or the e-book has no extractable cover / Calibre is unavailable, assembly continues without artwork and prints a warning. An explicitly supplied but missing/empty cover image is an error.
+
+When a cover is available, FFmpeg embeds it as an attached picture (`attached_pic`), not as a playable video stream. The audio and chapter streams continue to be mapped as before.
 
 The assembler validates each WAV, checks manifest status and SHA-256 hashes, verifies consistent sample rate/channel count, inserts silence between clips, writes chapter metadata, and encodes an AAC M4B using FFmpeg. It requires both `ffmpeg` and `ffprobe` on `PATH`.
 
