@@ -37,6 +37,60 @@ def ffmetadata_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("=", "\\=").replace(";", "\\;").replace("#", "\\#").replace("\n", " ").replace("\r", " ")
 
 
+def extract_cover_image(ebook_file: Path, output_path: Path) -> Path | None:
+    """Extract an embedded e-book cover with Calibre, returning None if unavailable."""
+    if shutil.which("ebook-meta") is None:
+        print("WARNING: Calibre's ebook-meta was not found; assembling without cover art.", file=sys.stderr)
+        return None
+    try:
+        result = subprocess.run(
+            ["ebook-meta", str(ebook_file), "--get-cover", str(output_path)],
+            check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+    except OSError as exc:
+        print(f"WARNING: Could not run ebook-meta ({exc}); assembling without cover art.", file=sys.stderr)
+        return None
+    if result.returncode != 0 or not output_path.is_file() or output_path.stat().st_size == 0:
+        detail = (result.stderr or "").strip()
+        suffix = f" Details: {detail}" if detail else ""
+        print(f"WARNING: No cover could be extracted from {ebook_file}; assembling without cover art.{suffix}", file=sys.stderr)
+        return None
+    return output_path
+
+
+def resolve_cover_image(cover_image: Path | None, ebook_file: Path | None, temp_dir: Path) -> Path | None:
+    """Resolve an explicit image or extract one from an e-book; explicit images win exclusively."""
+    if cover_image is not None and ebook_file is not None:
+        raise ValueError("Specify only one of --cover-image or --ebook-file")
+    if cover_image is not None:
+        path = cover_image.expanduser().resolve()
+        if not path.is_file() or path.stat().st_size == 0:
+            raise FileNotFoundError(f"Cover image does not exist or is empty: {path}")
+        return path
+    if ebook_file is not None:
+        ebook = ebook_file.expanduser().resolve()
+        if not ebook.is_file():
+            raise FileNotFoundError(f"Source e-book does not exist: {ebook}")
+        return extract_cover_image(ebook, temp_dir / "book-cover.jpg")
+    print("WARNING: No --cover-image or --ebook-file supplied; assembling without cover art.", file=sys.stderr)
+    return None
+
+
+def build_ffmpeg_command(concat_path: Path, metadata_path: Path, output: Path,
+                         cover_image: Path | None = None) -> list[str]:
+    """Build the final mux command, mapping cover art as an attached picture."""
+    cmd = ["ffmpeg", "-hide_banner", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_path),
+           "-f", "ffmetadata", "-i", str(metadata_path)]
+    if cover_image is not None:
+        cmd += ["-i", str(cover_image)]
+    cmd += ["-map", "0:a:0", "-map_metadata", "1", "-map_chapters", "1"]
+    if cover_image is not None:
+        cmd += ["-map", "2:v:0", "-c:v", "copy", "-disposition:v:0", "attached_pic",
+                "-metadata:s:v:0", "title=Cover", "-metadata:s:v:0", "comment=Cover (front)"]
+    cmd += ["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(output)]
+    return cmd
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--book-csv", type=Path, default=Path("Working_files/Book/book.csv"))
@@ -44,6 +98,9 @@ def main() -> int:
     p.add_argument("--output-dir", type=Path, default=Path("output_audiobook"))
     p.add_argument("--title", default="The City & The City")
     p.add_argument("--author", default="China Miéville")
+    cover_group = p.add_mutually_exclusive_group()
+    cover_group.add_argument("--cover-image", type=Path, help="Image file to embed as M4B cover art")
+    cover_group.add_argument("--ebook-file", type=Path, help="Source EPUB/ebook; extract its cover with Calibre")
     p.add_argument("--silence-ms", type=int, default=750)
     p.add_argument("--allow-missing-manifest", action="store_true", help="Check files only; skip manifest state/hash verification")
     a = p.parse_args()
@@ -123,9 +180,8 @@ def main() -> int:
             metadata_lines += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={start}", f"END={end}", f"title={ffmetadata_escape(f'Chapter {ch}: {title}')}" ]
         metadata_path.write_text("\n".join(metadata_lines) + "\n", encoding="utf-8")
         output = a.output_dir / "The_City_and_The_City.m4b"
-        cmd = ["ffmpeg", "-hide_banner", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_path),
-               "-f", "ffmetadata", "-i", str(metadata_path), "-map", "0:a:0", "-map_metadata", "1", "-map_chapters", "1",
-               "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(output)]
+        cover_image = resolve_cover_image(a.cover_image, a.ebook_file, tmp)
+        cmd = build_ffmpeg_command(concat_path, metadata_path, output, cover_image)
         subprocess.run(cmd, check=True)
     print(f"Created: {output}")
     print(f"Rows: {len(df)}; chapters: {len(chapter_entries)}; inserted inter-row silence: {a.silence_ms} ms")
