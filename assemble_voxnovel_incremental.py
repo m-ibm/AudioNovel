@@ -197,24 +197,6 @@ def resolve_cover_image(cover_image: Path | None, epub_file: Path | None, temp_d
     print("WARNING: No --cover-image or --epub-file supplied; assembling without cover art.", file=sys.stderr)
     return None
 
-def resolve_cover_image(cover_image: Path | None, ebook_file: Path | None, temp_dir: Path) -> Path | None:
-    """Resolve an explicit image or extract one from an e-book; explicit images win exclusively."""
-    if cover_image is not None and ebook_file is not None:
-        raise ValueError("Specify only one of --cover-image or --ebook-file")
-    if cover_image is not None:
-        path = cover_image.expanduser().resolve()
-        if not path.is_file() or path.stat().st_size == 0:
-            raise FileNotFoundError(f"Cover image does not exist or is empty: {path}")
-        return path
-    if ebook_file is not None:
-        ebook = ebook_file.expanduser().resolve()
-        if not ebook.is_file():
-            raise FileNotFoundError(f"Source e-book does not exist: {ebook}")
-        return extract_cover_image(ebook, temp_dir / "book-cover.jpg")
-    print("WARNING: No --cover-image or --ebook-file supplied; assembling without cover art.", file=sys.stderr)
-    return None
-
-
 def build_ffmpeg_command(concat_path: Path, metadata_path: Path, output: Path,
                          cover_image: Path | None = None) -> list[str]:
     """Build the final mux command, mapping cover art as an attached picture."""
